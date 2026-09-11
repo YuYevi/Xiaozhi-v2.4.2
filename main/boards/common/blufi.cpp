@@ -1,18 +1,31 @@
 #include "blufi.h"
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 #include "esp_bt.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/task.h"
 #include "wifi_manager.h"
 
-#define BLUFI_DEVICE_NAME "Xiaozhi-Blufi"
+#define BLUFI_DEVICE_NAME "VoiceBox-Blufi"
+
+static std::string GetBlufiDeviceName() {
+    uint8_t mac[6] = {};
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+        return BLUFI_DEVICE_NAME;
+    }
+
+    char device_name[32];
+    snprintf(device_name, sizeof(device_name), "%s-%02X%02X", BLUFI_DEVICE_NAME, mac[4], mac[5]);
+    return device_name;
+}
 
 #ifdef CONFIG_BT_BLUEDROID_ENABLED
 #include "esp_bt_device.h"
@@ -806,11 +819,13 @@ void Blufi::_wifi_scan_event_handler(void* arg, esp_event_base_t event_base, int
 
 void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t* param) {
     switch (event) {
-        case ESP_BLUFI_EVENT_INIT_FINISH:
+        case ESP_BLUFI_EVENT_INIT_FINISH: {
             ESP_LOGI(BLUFI_TAG, "BLUFI init finish");
-            esp_ble_gap_set_device_name(BLUFI_DEVICE_NAME);
+            const auto device_name = GetBlufiDeviceName();
+            esp_ble_gap_set_device_name(device_name.c_str());
             esp_blufi_adv_start();
             break;
+        }
         case ESP_BLUFI_EVENT_DEINIT_FINISH:
             ESP_LOGI(BLUFI_TAG, "BLUFI deinit finish");
             break;

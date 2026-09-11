@@ -187,6 +187,11 @@ void WifiBoard::StartWifiConfigMode() {
     });
 #elif CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
     auto &blufi = Blufi::GetInstance();
+    Application::GetInstance().Schedule([]() {
+        Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE,
+                                         Lang::Strings::ENTERING_WIFI_CONFIG_MODE,
+                                         "gear", Lang::Sounds::OGG_WIFICONFIG);
+    });
     // initialize esp-blufi protocol
     blufi.init();
 #endif

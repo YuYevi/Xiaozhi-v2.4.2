@@ -12,7 +12,7 @@
 
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
-#include <wifi_station.h>
+#include <wifi_manager.h>
 
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
@@ -82,7 +82,7 @@ private:
             power_save_timer_->WakeUp();
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting &&
-                !WifiStation::GetInstance().IsConnected()) {
+                !WifiManager::GetInstance().IsConnected()) {
                 EnterWifiConfigMode();
             }
             app.ToggleChatState();

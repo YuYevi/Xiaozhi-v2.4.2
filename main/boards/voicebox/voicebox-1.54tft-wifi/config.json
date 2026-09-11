@@ -1,0 +1,13 @@
+{
+    "manufacturer": "voicebox",
+    "type": "voicebox-1.54tft-wifi",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "voicebox-1.54tft-wifi",
+            "sdkconfig_append": [
+                "CONFIG_BOARD_TYPE_VOICEBOX_1_54TFT_WIFI=y"
+            ]
+        }
+    ]
+}

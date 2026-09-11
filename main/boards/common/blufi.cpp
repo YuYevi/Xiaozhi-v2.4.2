@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "board.h"
 #include "esp_bt.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -12,6 +13,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/task.h"
+#include "system_info.h"
 #include "wifi_manager.h"
 
 #define BLUFI_DEVICE_NAME "VoiceBox-Blufi"
@@ -73,6 +75,110 @@ void esp_blufi_btc_deinit(void);
 #include "ssid_manager.h"
 
 static const char* BLUFI_TAG = "BLUFI_CLASS";
+
+#ifdef CONFIG_BT_BLUEDROID_ENABLED
+namespace {
+
+// Scan-response manufacturer data: company id, format version, Client-Id UUID, Device-Id MAC.
+constexpr size_t kIdentityManufacturerDataLength = 2 + 1 + 16 + 6;
+constexpr uint8_t kIdentityFormatVersion = 1;
+uint8_t blufi_identity_manufacturer_data[kIdentityManufacturerDataLength] = {};
+esp_ble_adv_data_t blufi_identity_scan_rsp = {};
+
+int HexValue(char value) {
+    if (value >= '0' && value <= '9') {
+        return value - '0';
+    }
+    if (value >= 'a' && value <= 'f') {
+        return value - 'a' + 10;
+    }
+    if (value >= 'A' && value <= 'F') {
+        return value - 'A' + 10;
+    }
+    return -1;
+}
+
+bool ParseUuid(const std::string& value, uint8_t output[16]) {
+    size_t byte_index = 0;
+    int high_nibble = -1;
+
+    for (char character : value) {
+        if (character == '-') {
+            continue;
+        }
+
+        const int nibble = HexValue(character);
+        if (nibble < 0) {
+            return false;
+        }
+        if (high_nibble < 0) {
+            high_nibble = nibble;
+        } else {
+            if (byte_index >= 16) {
+                return false;
+            }
+            output[byte_index++] = static_cast<uint8_t>((high_nibble << 4) | nibble);
+            high_nibble = -1;
+        }
+    }
+
+    return byte_index == 16 && high_nibble < 0;
+}
+
+bool ParseMacAddress(const std::string& value, uint8_t output[6]) {
+    if (value.size() != 17) {
+        return false;
+    }
+
+    for (size_t i = 0; i < 6; ++i) {
+        const size_t offset = i * 3;
+        if (i < 5 && value[offset + 2] != ':') {
+            return false;
+        }
+
+        const int high_nibble = HexValue(value[offset]);
+        const int low_nibble = HexValue(value[offset + 1]);
+        if (high_nibble < 0 || low_nibble < 0) {
+            return false;
+        }
+        output[i] = static_cast<uint8_t>((high_nibble << 4) | low_nibble);
+    }
+
+    return true;
+}
+
+void ConfigureBlufiIdentityScanResponse() {
+    uint8_t client_id[16] = {};
+    uint8_t device_id[6] = {};
+    auto& board = Board::GetInstance();
+
+    if (!ParseUuid(board.GetUuid(), client_id) ||
+        !ParseMacAddress(SystemInfo::GetMacAddress(), device_id)) {
+        ESP_LOGE(BLUFI_TAG, "Cannot encode Client-Id or Device-Id for BLE scan response");
+        return;
+    }
+
+    // 0xffff is reserved for this project because no Bluetooth SIG company ID is assigned here.
+    blufi_identity_manufacturer_data[0] = 0xff;
+    blufi_identity_manufacturer_data[1] = 0xff;
+    blufi_identity_manufacturer_data[2] = kIdentityFormatVersion;
+    memcpy(blufi_identity_manufacturer_data + 3, client_id, sizeof(client_id));
+    memcpy(blufi_identity_manufacturer_data + 19, device_id, sizeof(device_id));
+
+    blufi_identity_scan_rsp = {};
+    blufi_identity_scan_rsp.set_scan_rsp = true;
+    blufi_identity_scan_rsp.manufacturer_len = sizeof(blufi_identity_manufacturer_data);
+    blufi_identity_scan_rsp.p_manufacturer_data = blufi_identity_manufacturer_data;
+
+    const esp_err_t ret = esp_ble_gap_config_adv_data(&blufi_identity_scan_rsp);
+    if (ret != ESP_OK) {
+        ESP_LOGE(BLUFI_TAG, "Failed to configure BLE identity scan response: %s",
+                 esp_err_to_name(ret));
+    }
+}
+
+}  // namespace
+#endif
 
 static wifi_mode_t GetWifiModeWithFallback(const WifiManager& wifi) {
     if (wifi.IsConfigMode()) {
@@ -823,6 +929,9 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t* para
             ESP_LOGI(BLUFI_TAG, "BLUFI init finish");
             const auto device_name = GetBlufiDeviceName();
             esp_ble_gap_set_device_name(device_name.c_str());
+#ifdef CONFIG_BT_BLUEDROID_ENABLED
+            ConfigureBlufiIdentityScanResponse();
+#endif
             esp_blufi_adv_start();
             break;
         }

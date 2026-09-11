@@ -7,7 +7,11 @@
             "name": "voicebox-1.54tft-wifi",
             "sdkconfig_append": [
                 "CONFIG_BOARD_TYPE_VOICEBOX_1_54TFT_WIFI=y"
-            ]
+            ],
+            "build_options": {
+                "display_style": "wechat",
+                "wifi_provisioning": "blufi"
+            }
         }
     ]
 }

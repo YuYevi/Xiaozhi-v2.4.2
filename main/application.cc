@@ -434,6 +434,7 @@ void Application::CheckNewVersion() {
     int retry_delay = 10;  // Initial retry delay in seconds
 
     auto& board = Board::GetInstance();
+    std::string activation_code_shown;
     while (true) {
         auto display = board.GetDisplay();
         display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
@@ -494,12 +495,32 @@ void Application::CheckNewVersion() {
         }
 
         display->SetStatus(Lang::Strings::ACTIVATION);
-        // Activation code is shown to the user and waiting for the user to input
+
+        // A normal activation code is completed by the mobile app. Keep the
+        // bind-only BLE session available and wait for the cloud state to change.
         if (ota_->HasActivationCode()) {
-            ShowActivationCode(ota_->GetActivationCode(), ota_->GetActivationMessage());
+            const auto& activation_code = ota_->GetActivationCode();
+            if (activation_code_shown != activation_code) {
+                ShowActivationCode(activation_code, ota_->GetActivationMessage());
+                activation_code_shown = activation_code;
+            }
+            if (!board.IsBleBindModeActive() &&
+                !board.EnterBleBindMode(BleSetupMode::BIND_ONLY)) {
+                ESP_LOGW(TAG, "Bind-only BLE mode is not ready, retrying");
+                vTaskDelay(pdMS_TO_TICKS(3000));
+                continue;
+            }
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            continue;
         }
 
-        // This will block the loop until the activation is done or timeout
+        // Challenge activation is a separate protocol used by serial-number
+        // devices. Only call Activate when a challenge was actually returned.
+        if (!ota_->HasActivationChallenge()) {
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            continue;
+        }
+
         for (int i = 0; i < 10; ++i) {
             ESP_LOGI(TAG, "Activating... %d/%d", i + 1, 10);
             esp_err_t err = ota_->Activate();

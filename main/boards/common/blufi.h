@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cassert>
 #include <cstring>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "psa/crypto.h"
+#include "board.h"
 #include "wifi_manager.h"
 
 class Blufi {
@@ -27,6 +29,10 @@ public:
      * @return true if a scan was started (or was already in progress); false on failure.
      */
     bool start_wifi_scan();
+
+    esp_err_t StartBindMode(BleSetupMode setup_mode);
+
+    bool IsActive() const { return inited_ && !m_deinited.load(); }
 
     /**
      * @brief Initializes the Bluetooth controller, host, and Blufi profile.
@@ -134,7 +140,9 @@ private:
     bool m_sta_connected;
     bool m_sta_got_ip;
     bool m_provisioned;
-    bool m_deinited;
+    std::atomic_bool m_deinited{false};
+    std::atomic_bool m_deinit_in_progress_{false};
+    std::atomic<BleSetupMode> m_setup_mode_{BleSetupMode::WIFI_PROVISION_AND_BIND};
     uint8_t m_sta_bssid[6]{};
     uint8_t m_sta_ssid[32]{};
     int m_sta_ssid_len;

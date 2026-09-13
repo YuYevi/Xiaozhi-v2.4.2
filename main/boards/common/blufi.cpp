@@ -16,7 +16,7 @@
 #include "system_info.h"
 #include "wifi_manager.h"
 
-#define BLUFI_DEVICE_NAME "VoiceBox-Blufi"
+#define BLUFI_DEVICE_NAME "BAJI-BLUFI"
 
 static std::string GetBlufiDeviceName() {
     uint8_t mac[6] = {};
@@ -79,11 +79,7 @@ static const char* BLUFI_TAG = "BLUFI_CLASS";
 #ifdef CONFIG_BT_BLUEDROID_ENABLED
 namespace {
 
-// Scan-response manufacturer data: company id, format version, Client-Id UUID, Device-Id MAC.
-constexpr size_t kIdentityManufacturerDataLength = 2 + 1 + 16 + 6;
-constexpr uint8_t kIdentityFormatVersion = 1;
-uint8_t blufi_identity_manufacturer_data[kIdentityManufacturerDataLength] = {};
-esp_ble_adv_data_t blufi_identity_scan_rsp = {};
+uint8_t blufi_identity_scan_rsp[30] = {};
 
 int HexValue(char value) {
     if (value >= '0' && value <= '9') {
@@ -147,7 +143,7 @@ bool ParseMacAddress(const std::string& value, uint8_t output[6]) {
     return true;
 }
 
-void ConfigureBlufiIdentityScanResponse() {
+esp_err_t ConfigureBlufiIdentityScanResponse(BleSetupMode setup_mode) {
     uint8_t client_id[16] = {};
     uint8_t device_id[6] = {};
     auto& board = Board::GetInstance();
@@ -155,26 +151,35 @@ void ConfigureBlufiIdentityScanResponse() {
     if (!ParseUuid(board.GetUuid(), client_id) ||
         !ParseMacAddress(SystemInfo::GetMacAddress(), device_id)) {
         ESP_LOGE(BLUFI_TAG, "Cannot encode Client-Id or Device-Id for BLE scan response");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // [len, Service Data, UUID(0xffff), type, version, fields, Device-Id, Client-Id, mode]
+    blufi_identity_scan_rsp[0] = sizeof(blufi_identity_scan_rsp) - 1;
+    blufi_identity_scan_rsp[1] = 0x16;
+    blufi_identity_scan_rsp[2] = 0xff;
+    blufi_identity_scan_rsp[3] = 0xff;
+    blufi_identity_scan_rsp[4] = 0x01;
+    blufi_identity_scan_rsp[5] = 0x02;
+    blufi_identity_scan_rsp[6] = 0x07;
+    memcpy(blufi_identity_scan_rsp + 7, device_id, sizeof(device_id));
+    memcpy(blufi_identity_scan_rsp + 13, client_id, sizeof(client_id));
+    blufi_identity_scan_rsp[29] = static_cast<uint8_t>(setup_mode);
+
+    return esp_ble_gap_config_scan_rsp_data_raw(blufi_identity_scan_rsp,
+                                                sizeof(blufi_identity_scan_rsp));
+}
+
+void BlufiGapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param) {
+    if (event == ESP_GAP_BLE_SCAN_RSP_DATA_RAW_SET_COMPLETE_EVT) {
+        if (param == nullptr ||
+            param->scan_rsp_data_raw_cmpl.status != ESP_BT_STATUS_SUCCESS) {
+            ESP_LOGE(BLUFI_TAG, "Failed to configure BLE identity scan response");
+        }
+        esp_blufi_adv_start();
         return;
     }
-
-    // 0xffff is reserved for this project because no Bluetooth SIG company ID is assigned here.
-    blufi_identity_manufacturer_data[0] = 0xff;
-    blufi_identity_manufacturer_data[1] = 0xff;
-    blufi_identity_manufacturer_data[2] = kIdentityFormatVersion;
-    memcpy(blufi_identity_manufacturer_data + 3, client_id, sizeof(client_id));
-    memcpy(blufi_identity_manufacturer_data + 19, device_id, sizeof(device_id));
-
-    blufi_identity_scan_rsp = {};
-    blufi_identity_scan_rsp.set_scan_rsp = true;
-    blufi_identity_scan_rsp.manufacturer_len = sizeof(blufi_identity_manufacturer_data);
-    blufi_identity_scan_rsp.p_manufacturer_data = blufi_identity_manufacturer_data;
-
-    const esp_err_t ret = esp_ble_gap_config_adv_data(&blufi_identity_scan_rsp);
-    if (ret != ESP_OK) {
-        ESP_LOGE(BLUFI_TAG, "Failed to configure BLE identity scan response: %s",
-                 esp_err_to_name(ret));
-    }
+    esp_blufi_gap_event_handler(event, param);
 }
 
 }  // namespace
@@ -219,11 +224,34 @@ Blufi::~Blufi() {
     }
 }
 
+esp_err_t Blufi::StartBindMode(BleSetupMode setup_mode) {
+    m_setup_mode_ = setup_mode;
+
+    if (m_deinit_in_progress_) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (inited_ && !m_deinited) {
+        // Wait for the previous provisioning session's asynchronous deinit to
+        // finish before starting the bind-only session.
+        if (m_provisioned && !m_ble_is_connected) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (!m_ble_is_connected) {
+            esp_blufi_adv_start();
+        }
+        return ESP_OK;
+    }
+
+    return init();
+}
+
 esp_err_t Blufi::init() {
     esp_err_t ret = ESP_FAIL;
     inited_ = true;
     m_provisioned = false;
     m_deinited = false;
+    m_deinit_in_progress_ = false;
 
     // Start WiFi scan early to have results ready when user connects
     auto& wifi_manager = WifiManager::GetInstance();
@@ -263,6 +291,7 @@ esp_err_t Blufi::deinit() {
             return ESP_OK;
         }
         m_deinited = true;
+        m_deinit_in_progress_ = true;
         ret = _host_deinit();
         if (ret) {
             ESP_LOGE(BLUFI_TAG, "Host deinit failed: %s", esp_err_to_name(ret));
@@ -273,6 +302,7 @@ esp_err_t Blufi::deinit() {
             ESP_LOGE(BLUFI_TAG, "Controller deinit failed: %s", esp_err_to_name(ret));
         }
 #endif
+        m_deinit_in_progress_ = false;
     }
     return ret;
 }
@@ -312,7 +342,7 @@ esp_err_t Blufi::_host_deinit() {
 }
 
 esp_err_t Blufi::_gap_register_callback() {
-    esp_err_t rc = esp_ble_gap_register_callback(esp_blufi_gap_event_handler);
+    esp_err_t rc = esp_ble_gap_register_callback(BlufiGapEventHandler);
     if (rc) {
         return rc;
     }
@@ -930,9 +960,12 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t* para
             const auto device_name = GetBlufiDeviceName();
             esp_ble_gap_set_device_name(device_name.c_str());
 #ifdef CONFIG_BT_BLUEDROID_ENABLED
-            ConfigureBlufiIdentityScanResponse();
-#endif
+            if (ConfigureBlufiIdentityScanResponse(m_setup_mode_.load()) != ESP_OK) {
+                esp_blufi_adv_start();
+            }
+#else
             esp_blufi_adv_start();
+#endif
             break;
         }
         case ESP_BLUFI_EVENT_DEINIT_FINISH:
@@ -1027,7 +1060,7 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t* para
                 [](void* ctx) {
                     auto* self = static_cast<Blufi*>(ctx);
                     auto& wifi = WifiManager::GetInstance();
-                    constexpr int kConnectTimeoutMs = 10000;
+                    constexpr int kConnectTimeoutMs = 45000;
                     constexpr TickType_t kDelayTick = pdMS_TO_TICKS(200);
                     int waited_ms = 0;
 
@@ -1067,6 +1100,9 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t* para
                         ESP_LOGI(BLUFI_TAG, "connected to WiFi");
 
                         if (self->m_ble_is_connected) {
+                            // Give the client time to receive the success report
+                            // before closing the provisioning connection.
+                            vTaskDelay(pdMS_TO_TICKS(300));
                             esp_blufi_disconnect();
                         }
                     } else {

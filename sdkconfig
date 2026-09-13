@@ -966,7 +966,7 @@ CONFIG_PARTITION_TABLE_MD5=y
 # Xiaozhi Assistant
 #
 # default:
-CONFIG_OTA_URL="https://api.tenclass.net/xiaozhi/ota/"
+CONFIG_OTA_URL="https://www.xinyhx.com/apicyhx/device/ota/"
 # default:
 # CONFIG_FLASH_NONE_ASSETS is not set
 # default:
@@ -2240,8 +2240,7 @@ CONFIG_BT_CTRL_BLE_MIN_CONN_INTERVAL_ENABLE=y
 #
 # Legacy I2C Driver Configurations
 #
-# default:
-# CONFIG_I2C_SUPPRESS_DEPRECATE_WARN is not set
+CONFIG_I2C_SUPPRESS_DEPRECATE_WARN=y
 # default:
 # CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK is not set
 # end of Legacy I2C Driver Configurations
